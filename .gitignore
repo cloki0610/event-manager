@@ -1,0 +1,7 @@
+/target
+/migrations
+*.pem
+*.db
+*.db-shm
+*.db-wal
+.env
