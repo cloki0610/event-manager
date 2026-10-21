@@ -17,35 +17,36 @@ pub async fn list_events(
     offset: i64,
     starting_after: Option<DateTime<Utc>>,
 ) -> Result<Vec<Event>, AppError> {
-    let events = match starting_after {
-        Some(now) => {
-            sqlx::query_as::<_, Event>(&format!(
+    let events =
+        match starting_after {
+            Some(now) => sqlx::query_as::<_, Event>(&format!(
                 "{EVENT_SELECT} WHERE e.starts_at >= ? ORDER BY e.starts_at, e.id LIMIT ? OFFSET ?"
             ))
             .bind(now)
             .bind(limit)
             .bind(offset)
             .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as::<_, Event>(&format!(
-                "{EVENT_SELECT} ORDER BY e.starts_at, e.id LIMIT ? OFFSET ?"
-            ))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?
-        }
-    };
+            .await?,
+            None => {
+                sqlx::query_as::<_, Event>(&format!(
+                    "{EVENT_SELECT} ORDER BY e.starts_at, e.id LIMIT ? OFFSET ?"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(pool)
+                .await?
+            }
+        };
     Ok(events)
 }
 
 pub async fn event(pool: &SqlitePool, id: &str) -> Result<Option<Event>, AppError> {
-    Ok(sqlx::query_as::<_, Event>(&format!("{EVENT_SELECT} WHERE e.id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, Event>(&format!("{EVENT_SELECT} WHERE e.id = ?"))
+            .bind(id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 pub async fn insert_event(

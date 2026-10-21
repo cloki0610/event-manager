@@ -23,7 +23,9 @@ fn validate(
         return Err(AppError::BadRequest("title must not be empty".into()));
     }
     if ends_at.is_some_and(|end| end < starts_at) {
-        return Err(AppError::BadRequest("ends_at must not be before starts_at".into()));
+        return Err(AppError::BadRequest(
+            "ends_at must not be before starts_at".into(),
+        ));
     }
     if capacity.is_some_and(|c| c < 1) {
         return Err(AppError::BadRequest("capacity must be at least 1".into()));

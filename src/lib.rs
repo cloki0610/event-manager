@@ -44,7 +44,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/{id}", web::get().to(handlers::events::get))
             .route("/{id}", web::patch().to(handlers::events::update))
             .route("/{id}", web::delete().to(handlers::events::delete))
-            .route("/{id}/attendees", web::get().to(handlers::attendance::attendees))
+            .route(
+                "/{id}/attendees",
+                web::get().to(handlers::attendance::attendees),
+            )
             .route("/{id}/join", web::post().to(handlers::attendance::join))
             .route("/{id}/leave", web::post().to(handlers::attendance::leave)),
     )

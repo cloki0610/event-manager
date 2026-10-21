@@ -41,7 +41,12 @@ fn event_row(row: &Row<'_>) -> duckdb::Result<Event> {
 }
 
 fn guest_row(row: &Row<'_>) -> duckdb::Result<Guest> {
-    Ok(Guest { id: row.get(0)?, name: row.get(1)?, email: row.get(2)?, created_at: row.get(3)? })
+    Ok(Guest {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        email: row.get(2)?,
+        created_at: row.get(3)?,
+    })
 }
 
 fn is_unique_violation(err: &duckdb::Error) -> bool {
@@ -65,7 +70,9 @@ impl DuckDb {
         })
         .await
         .map_err(|e| AppError::Blocking(e.to_string()))??;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     async fn run<T, F>(&self, f: F) -> Result<T, AppError>
@@ -95,7 +102,9 @@ impl DuckDb {
                     .query_map(params![now, limit, offset], event_row)?
                     .collect::<duckdb::Result<_>>()?,
                 None => c
-                    .prepare(&format!("{EVENT_SELECT} ORDER BY e.starts_at, e.id LIMIT ? OFFSET ?"))?
+                    .prepare(&format!(
+                        "{EVENT_SELECT} ORDER BY e.starts_at, e.id LIMIT ? OFFSET ?"
+                    ))?
                     .query_map(params![limit, offset], event_row)?
                     .collect::<duckdb::Result<_>>()?,
             };
@@ -107,8 +116,10 @@ impl DuckDb {
     pub async fn event(&self, id: &str) -> Result<Option<Event>, AppError> {
         let id = id.to_string();
         self.run(move |c| {
-            Ok(c.query_row(&format!("{EVENT_SELECT} WHERE e.id = ?"), [id], event_row)
-                .optional()?)
+            Ok(
+                c.query_row(&format!("{EVENT_SELECT} WHERE e.id = ?"), [id], event_row)
+                    .optional()?,
+            )
         })
         .await
     }
@@ -155,7 +166,16 @@ impl DuckDb {
             let n = c.execute(
                 "UPDATE events SET title = ?, description = ?, location = ?, starts_at = ?, \
                  ends_at = ?, capacity = ?, updated_at = ? WHERE id = ?",
-                params![title, description, location, starts_at, ends_at, capacity, now, id],
+                params![
+                    title,
+                    description,
+                    location,
+                    starts_at,
+                    ends_at,
+                    capacity,
+                    now,
+                    id
+                ],
             )?;
             Ok(n > 0)
         })
@@ -183,7 +203,11 @@ impl DuckDb {
                  WHERE a.event_id = ? ORDER BY a.joined_at, g.id",
             )?
             .query_map([event_id], |r| {
-                Ok(Attendee { guest_id: r.get(0)?, name: r.get(1)?, joined_at: r.get(2)? })
+                Ok(Attendee {
+                    guest_id: r.get(0)?,
+                    name: r.get(1)?,
+                    joined_at: r.get(2)?,
+                })
             })?
             .collect::<duckdb::Result<_>>()?)
         })
@@ -296,7 +320,10 @@ impl DuckDb {
     ) -> Result<(), AppError> {
         let (token_hash, guest_id) = (token_hash.to_string(), guest_id.to_string());
         self.run(move |c| {
-            c.execute("DELETE FROM sessions WHERE expires_at < CAST(? AS TIMESTAMP)", params![now])?;
+            c.execute(
+                "DELETE FROM sessions WHERE expires_at < CAST(? AS TIMESTAMP)",
+                params![now],
+            )?;
             c.execute(
                 "INSERT INTO sessions (token_hash, guest_id, created_at, expires_at) \
                  VALUES (?, ?, ?, ?)",
@@ -342,8 +369,11 @@ impl DuckDb {
         now: DateTime<Utc>,
         stale_before: DateTime<Utc>,
     ) -> Result<(), AppError> {
-        let (state, nonce, verifier) =
-            (state.to_string(), nonce.to_string(), pkce_verifier.to_string());
+        let (state, nonce, verifier) = (
+            state.to_string(),
+            nonce.to_string(),
+            pkce_verifier.to_string(),
+        );
         self.run(move |c| {
             c.execute(
                 "DELETE FROM login_states WHERE created_at < CAST(? AS TIMESTAMP)",
@@ -379,5 +409,9 @@ impl DuckDb {
 }
 
 fn owned_text(f: &EventFields<'_>) -> (String, Option<String>, Option<String>) {
-    (f.title.to_string(), f.description.map(str::to_string), f.location.map(str::to_string))
+    (
+        f.title.to_string(),
+        f.description.map(str::to_string),
+        f.location.map(str::to_string),
+    )
 }

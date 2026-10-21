@@ -18,7 +18,11 @@ async fn main() -> std::io::Result<()> {
 
     let sso_config = SsoConfig::from_env().map_err(std::io::Error::other)?;
     log::info!("discovering SSO provider {}", sso_config.issuer_url);
-    let sso = web::Data::new(Sso::discover(sso_config).await.map_err(std::io::Error::other)?);
+    let sso = web::Data::new(
+        Sso::discover(sso_config)
+            .await
+            .map_err(std::io::Error::other)?,
+    );
 
     log::info!("listening on http://{bind}");
     HttpServer::new(move || {

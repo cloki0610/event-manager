@@ -50,7 +50,10 @@ impl Db {
     pub async fn connect(url: &str, max_connections: u32) -> Result<Self, String> {
         if let Some(path) = url.strip_prefix("duckdb://") {
             #[cfg(feature = "duckdb")]
-            return duckdb::DuckDb::open(path).await.map(Db::DuckDb).map_err(|e| e.to_string());
+            return duckdb::DuckDb::open(path)
+                .await
+                .map(Db::DuckDb)
+                .map_err(|e| e.to_string());
             #[cfg(not(feature = "duckdb"))]
             return Err(format!(
                 "cannot open duckdb://{path}: built without the `duckdb` feature \
@@ -183,7 +186,10 @@ impl Db {
         match self {
             Db::Sqlite(p) => sqlite::insert_session(p, token_hash, guest_id, now, expires_at).await,
             #[cfg(feature = "duckdb")]
-            Db::DuckDb(d) => d.insert_session(token_hash, guest_id, now, expires_at).await,
+            Db::DuckDb(d) => {
+                d.insert_session(token_hash, guest_id, now, expires_at)
+                    .await
+            }
         }
     }
 
@@ -222,7 +228,10 @@ impl Db {
                 sqlite::insert_login_state(p, state, nonce, pkce_verifier, now, stale_before).await
             }
             #[cfg(feature = "duckdb")]
-            Db::DuckDb(d) => d.insert_login_state(state, nonce, pkce_verifier, now, stale_before).await,
+            Db::DuckDb(d) => {
+                d.insert_login_state(state, nonce, pkce_verifier, now, stale_before)
+                    .await
+            }
         }
     }
 

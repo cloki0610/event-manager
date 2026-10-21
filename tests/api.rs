@@ -16,8 +16,8 @@ use openidconnect::core::{
 use openidconnect::url::Url;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, EndUserEmail, EndUserName, IssuerUrl, JsonWebKeyId,
-    LocalizedClaim, Nonce, PkceCodeChallenge, PkceCodeVerifier, PrivateSigningKey,
-    StandardClaims, SubjectIdentifier,
+    LocalizedClaim, Nonce, PkceCodeChallenge, PkceCodeVerifier, PrivateSigningKey, StandardClaims,
+    SubjectIdentifier,
 };
 use serde_json::{Value, json};
 
@@ -46,8 +46,7 @@ struct MockIdp {
 }
 
 fn signing_key() -> CoreRsaPrivateSigningKey {
-    CoreRsaPrivateSigningKey::from_pem(IDP_KEY, Some(JsonWebKeyId::new("test-key".into())))
-        .unwrap()
+    CoreRsaPrivateSigningKey::from_pem(IDP_KEY, Some(JsonWebKeyId::new("test-key".into()))).unwrap()
 }
 
 async fn discovery(idp: web::Data<MockIdp>) -> HttpResponse {
@@ -64,12 +63,17 @@ async fn discovery(idp: web::Data<MockIdp>) -> HttpResponse {
 }
 
 async fn jwks() -> HttpResponse {
-    HttpResponse::Ok().json(CoreJsonWebKeySet::new(vec![signing_key().as_verification_key()]))
+    HttpResponse::Ok().json(CoreJsonWebKeySet::new(vec![
+        signing_key().as_verification_key(),
+    ]))
 }
 
 async fn token(idp: web::Data<MockIdp>, form: web::Form<HashMap<String, String>>) -> HttpResponse {
     let invalid_grant = || HttpResponse::BadRequest().json(json!({ "error": "invalid_grant" }));
-    let Some(grant) = form.get("code").and_then(|c| idp.grants.lock().unwrap().remove(c)) else {
+    let Some(grant) = form
+        .get("code")
+        .and_then(|c| idp.grants.lock().unwrap().remove(c))
+    else {
         return invalid_grant();
     };
     let verifier = PkceCodeVerifier::new(form.get("code_verifier").cloned().unwrap_or_default());
@@ -77,7 +81,12 @@ async fn token(idp: web::Data<MockIdp>, form: web::Form<HashMap<String, String>>
         return invalid_grant();
     }
 
-    let nonce = idp.forced_nonce.lock().unwrap().clone().unwrap_or(grant.nonce);
+    let nonce = idp
+        .forced_nonce
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or(grant.nonce);
     let mut name = LocalizedClaim::new();
     name.insert(None, EndUserName::new(grant.name));
     let claims = CoreIdTokenClaims::new(
@@ -120,7 +129,10 @@ async fn start_idp() -> web::Data<MockIdp> {
     let server = HttpServer::new(move || {
         App::new()
             .app_data(data.clone())
-            .route("/.well-known/openid-configuration", web::get().to(discovery))
+            .route(
+                "/.well-known/openid-configuration",
+                web::get().to(discovery),
+            )
             .route("/jwks", web::get().to(jwks))
             .route("/token", web::post().to(token))
     })
@@ -171,11 +183,21 @@ struct PendingLogin {
     state_cookie: Cookie<'static>,
 }
 
-async fn start_login<S>(app: &S, idp: &MockIdp, code: &str, subject: &str, name: &str) -> PendingLogin
+async fn start_login<S>(
+    app: &S,
+    idp: &MockIdp,
+    code: &str,
+    subject: &str,
+    name: &str,
+) -> PendingLogin
 where
     S: Service<actix_http::Request, Response = ServiceResponse, Error = actix_web::Error>,
 {
-    let resp = test::call_service(app, test::TestRequest::get().uri("/auth/login").to_request()).await;
+    let resp = test::call_service(
+        app,
+        test::TestRequest::get().uri("/auth/login").to_request(),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::FOUND);
     let state_cookie = resp
         .response()
@@ -203,7 +225,10 @@ where
             code_challenge: q["code_challenge"].clone(),
         },
     );
-    PendingLogin { state: q["state"].clone(), state_cookie }
+    PendingLogin {
+        state: q["state"].clone(),
+        state_cookie,
+    }
 }
 
 async fn finish_login<S>(app: &S, login: &PendingLogin, code: &str) -> ServiceResponse
@@ -237,7 +262,10 @@ async fn create_event<S>(app: &S, body: Value) -> Event
 where
     S: Service<actix_http::Request, Response = ServiceResponse, Error = actix_web::Error>,
 {
-    let req = test::TestRequest::post().uri("/events").set_json(body).to_request();
+    let req = test::TestRequest::post()
+        .uri("/events")
+        .set_json(body)
+        .to_request();
     let resp = test::call_service(app, req).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
     test::read_body_json(resp).await
@@ -266,7 +294,9 @@ async fn event_crud() {
     assert_eq!(event.attendee_count, 0);
 
     // view
-    let req = test::TestRequest::get().uri(&format!("/events/{}", event.id)).to_request();
+    let req = test::TestRequest::get()
+        .uri(&format!("/events/{}", event.id))
+        .to_request();
     let fetched: Event = test::call_and_read_body_json(&app, req).await;
     assert_eq!(fetched.id, event.id);
 
@@ -282,24 +312,45 @@ async fn event_crud() {
     assert_eq!(updated.starts_at, event.starts_at);
 
     // list
-    create_event(&app, json!({ "title": "Earlier", "starts_at": "2029-05-01T09:00:00Z" })).await;
+    create_event(
+        &app,
+        json!({ "title": "Earlier", "starts_at": "2029-05-01T09:00:00Z" }),
+    )
+    .await;
     let req = test::TestRequest::get().uri("/events").to_request();
     let events: Vec<Event> = test::call_and_read_body_json(&app, req).await;
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].title, "Earlier", "sorted by start time");
 
-    let req = test::TestRequest::get().uri("/events?limit=1&offset=1").to_request();
+    let req = test::TestRequest::get()
+        .uri("/events?limit=1&offset=1")
+        .to_request();
     let page: Vec<Event> = test::call_and_read_body_json(&app, req).await;
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].id, event.id);
 
     // delete
-    let req = test::TestRequest::delete().uri(&format!("/events/{}", event.id)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NO_CONTENT);
-    let req = test::TestRequest::get().uri(&format!("/events/{}", event.id)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
-    let req = test::TestRequest::delete().uri(&format!("/events/{}", event.id)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
+    let req = test::TestRequest::delete()
+        .uri(&format!("/events/{}", event.id))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let req = test::TestRequest::get()
+        .uri(&format!("/events/{}", event.id))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let req = test::TestRequest::delete()
+        .uri(&format!("/events/{}", event.id))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[actix_web::test]
@@ -313,15 +364,23 @@ async fn event_validation() {
         json!({ "title": "x", "starts_at": "not a date" }),
         json!({ "starts_at": "2030-01-01T00:00:00Z" }),
     ] {
-        let req = test::TestRequest::post().uri("/events").set_json(&body).to_request();
+        let req = test::TestRequest::post()
+            .uri("/events")
+            .set_json(&body)
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "body: {body}");
         let err: Value = test::read_body_json(resp).await;
         assert!(err["error"].is_string());
     }
 
-    let req = test::TestRequest::get().uri("/events/not-a-uuid").to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
+    let req = test::TestRequest::get()
+        .uri("/events/not-a-uuid")
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -349,10 +408,16 @@ async fn sso_login_creates_session() {
     assert_eq!(session_cookie.value(), session.token);
 
     // the session works as a bearer token and as a cookie
-    let req = test::TestRequest::get().uri("/guests/me").insert_header(bearer(&session.token)).to_request();
+    let req = test::TestRequest::get()
+        .uri("/guests/me")
+        .insert_header(bearer(&session.token))
+        .to_request();
     let me: Guest = test::call_and_read_body_json(&app, req).await;
     assert_eq!(me.id, session.guest.id);
-    let req = test::TestRequest::get().uri("/guests/me").cookie(session_cookie).to_request();
+    let req = test::TestRequest::get()
+        .uri("/guests/me")
+        .cookie(session_cookie)
+        .to_request();
     let me: Guest = test::call_and_read_body_json(&app, req).await;
     assert_eq!(me.id, session.guest.id);
 
@@ -367,11 +432,26 @@ async fn sso_login_creates_session() {
     assert_ne!(other.guest.id, session.guest.id);
 
     // logout invalidates only that session
-    let req = test::TestRequest::post().uri("/auth/logout").insert_header(bearer(&session.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NO_CONTENT);
-    let req = test::TestRequest::get().uri("/guests/me").insert_header(bearer(&session.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
-    let req = test::TestRequest::get().uri("/guests/me").insert_header(bearer(&again.token)).to_request();
+    let req = test::TestRequest::post()
+        .uri("/auth/logout")
+        .insert_header(bearer(&session.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let req = test::TestRequest::get()
+        .uri("/guests/me")
+        .insert_header(bearer(&session.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let req = test::TestRequest::get()
+        .uri("/guests/me")
+        .insert_header(bearer(&again.token))
+        .to_request();
     assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
 }
 
@@ -384,7 +464,10 @@ async fn sso_rejects_tampered_logins() {
     let req = test::TestRequest::get()
         .uri(&format!("/auth/callback?code=c1&state={}", pending.state))
         .to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // state cookie from a different login
     let other = start_login(&app, &idp, "c2", "mallory", "Mallory").await;
@@ -392,20 +475,35 @@ async fn sso_rejects_tampered_logins() {
         .uri(&format!("/auth/callback?code=c1&state={}", pending.state))
         .cookie(other.state_cookie.clone())
         .to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // a state can only be used once
-    assert_eq!(finish_login(&app, &other, "c2").await.status(), StatusCode::OK);
-    assert_eq!(finish_login(&app, &other, "c2").await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        finish_login(&app, &other, "c2").await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        finish_login(&app, &other, "c2").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // unknown authorization code
     let pending = start_login(&app, &idp, "c3", "mallory", "Mallory").await;
-    assert_eq!(finish_login(&app, &pending, "wrong-code").await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        finish_login(&app, &pending, "wrong-code").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // ID token with the wrong nonce (replayed token)
     let pending = start_login(&app, &idp, "c4", "mallory", "Mallory").await;
     *idp.forced_nonce.lock().unwrap() = Some("stale-nonce".into());
-    assert_eq!(finish_login(&app, &pending, "c4").await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        finish_login(&app, &pending, "c4").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
     *idp.forced_nonce.lock().unwrap() = None;
 
     // provider reports an error (e.g. user denied consent)
@@ -419,18 +517,36 @@ async fn sso_rejects_tampered_logins() {
 
     // missing or bogus sessions
     let req = test::TestRequest::get().uri("/guests/me").to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
-    let req = test::TestRequest::get().uri("/guests/me").insert_header(bearer("bogus")).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
-    let req = test::TestRequest::post().uri("/auth/logout").insert_header(bearer("bogus")).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let req = test::TestRequest::get()
+        .uri("/guests/me")
+        .insert_header(bearer("bogus"))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let req = test::TestRequest::post()
+        .uri("/auth/logout")
+        .insert_header(bearer("bogus"))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // the old self-registration endpoint is gone
     let req = test::TestRequest::post()
         .uri("/guests")
         .set_json(json!({ "name": "x", "email": "x@example.com" }))
         .to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -453,16 +569,34 @@ async fn guests_join_and_leave() {
 
     // joining requires a session
     let req = test::TestRequest::post().uri(&join_uri).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // alice joins; joining twice conflicts
-    let req = test::TestRequest::post().uri(&join_uri).insert_header(bearer(&alice.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::CREATED);
-    let req = test::TestRequest::post().uri(&join_uri).insert_header(bearer(&alice.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::CONFLICT);
+    let req = test::TestRequest::post()
+        .uri(&join_uri)
+        .insert_header(bearer(&alice.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::CREATED
+    );
+    let req = test::TestRequest::post()
+        .uri(&join_uri)
+        .insert_header(bearer(&alice.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::CONFLICT
+    );
 
     // event is full for bob
-    let req = test::TestRequest::post().uri(&join_uri).insert_header(bearer(&bob.token)).to_request();
+    let req = test::TestRequest::post()
+        .uri(&join_uri)
+        .insert_header(bearer(&bob.token))
+        .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let err: Value = test::read_body_json(resp).await;
@@ -474,16 +608,27 @@ async fn guests_join_and_leave() {
         .set_json(json!({ "capacity": null }))
         .to_request();
     assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
-    let req = test::TestRequest::post().uri(&join_uri).insert_header(bearer(&bob.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::CREATED);
+    let req = test::TestRequest::post()
+        .uri(&join_uri)
+        .insert_header(bearer(&bob.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::CREATED
+    );
     let req = test::TestRequest::patch()
         .uri(&format!("/events/{}", event.id))
         .set_json(json!({ "capacity": 1 }))
         .to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::CONFLICT
+    );
 
     // attendee list hides emails
-    let req = test::TestRequest::get().uri(&format!("/events/{}/attendees", event.id)).to_request();
+    let req = test::TestRequest::get()
+        .uri(&format!("/events/{}/attendees", event.id))
+        .to_request();
     let attendees: Vec<Value> = test::call_and_read_body_json(&app, req).await;
     assert_eq!(attendees.len(), 2);
     assert!(attendees.iter().all(|a| a.get("email").is_none()));
@@ -491,25 +636,54 @@ async fn guests_join_and_leave() {
     assert_eq!(attendees[0].name, "Alice");
 
     // my events
-    let req = test::TestRequest::get().uri("/guests/me/events").insert_header(bearer(&bob.token)).to_request();
+    let req = test::TestRequest::get()
+        .uri("/guests/me/events")
+        .insert_header(bearer(&bob.token))
+        .to_request();
     let mine: Vec<Event> = test::call_and_read_body_json(&app, req).await;
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].attendee_count, 2);
 
     // leave; leaving again is 404
-    let req = test::TestRequest::post().uri(&leave_uri).insert_header(bearer(&alice.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NO_CONTENT);
-    let req = test::TestRequest::post().uri(&leave_uri).insert_header(bearer(&alice.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
+    let req = test::TestRequest::post()
+        .uri(&leave_uri)
+        .insert_header(bearer(&alice.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let req = test::TestRequest::post()
+        .uri(&leave_uri)
+        .insert_header(bearer(&alice.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
 
     // deleting the event removes attendances
-    let req = test::TestRequest::delete().uri(&format!("/events/{}", event.id)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NO_CONTENT);
-    let req = test::TestRequest::get().uri("/guests/me/events").insert_header(bearer(&bob.token)).to_request();
+    let req = test::TestRequest::delete()
+        .uri(&format!("/events/{}", event.id))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let req = test::TestRequest::get()
+        .uri("/guests/me/events")
+        .insert_header(bearer(&bob.token))
+        .to_request();
     let mine: Vec<Event> = test::call_and_read_body_json(&app, req).await;
     assert!(mine.is_empty());
 
     // joining a missing event
-    let req = test::TestRequest::post().uri(&join_uri).insert_header(bearer(&bob.token)).to_request();
-    assert_eq!(test::call_service(&app, req).await.status(), StatusCode::NOT_FOUND);
+    let req = test::TestRequest::post()
+        .uri(&join_uri)
+        .insert_header(bearer(&bob.token))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }

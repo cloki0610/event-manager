@@ -4,8 +4,7 @@ use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::{Duration, Utc};
 use openidconnect::core::CoreAuthenticationFlow;
 use openidconnect::{
-    AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope,
-    TokenResponse,
+    AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse,
 };
 use serde::Deserialize;
 
@@ -20,10 +19,7 @@ const STATE_COOKIE: &str = "oidc_state";
 const LOGIN_TIMEOUT_MINUTES: i64 = 10;
 
 /// Starts the authorization-code flow (with PKCE) by redirecting to the provider.
-pub async fn login(
-    db: web::Data<Db>,
-    sso: web::Data<Sso>,
-) -> Result<HttpResponse, AppError> {
+pub async fn login(db: web::Data<Db>, sso: web::Data<Sso>) -> Result<HttpResponse, AppError> {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let (auth_url, state, nonce) = sso
         .client
@@ -89,13 +85,17 @@ pub async fn callback(
 
     let cookie_state = req.cookie(STATE_COOKIE).map(|c| c.value().to_string());
     if cookie_state.as_deref() != Some(state.as_str()) {
-        return Err(AppError::LoginFailed("state does not match login cookie".into()));
+        return Err(AppError::LoginFailed(
+            "state does not match login cookie".into(),
+        ));
     }
 
     // Single use: the row is consumed whether or not the rest of the login succeeds.
     let pending = db.take_login_state(&state).await?;
     let Some((nonce, pkce_verifier, created_at)) = pending else {
-        return Err(AppError::LoginFailed("unknown or already used state".into()));
+        return Err(AppError::LoginFailed(
+            "unknown or already used state".into(),
+        ));
     };
     if Utc::now() - created_at > Duration::minutes(LOGIN_TIMEOUT_MINUTES) {
         return Err(AppError::LoginFailed("login attempt expired".into()));
@@ -142,7 +142,9 @@ pub async fn callback(
         .http_only(true)
         .secure(sso.secure_cookies())
         .same_site(SameSite::Lax)
-        .max_age(time::Duration::seconds(sso.config.session_ttl.num_seconds()))
+        .max_age(time::Duration::seconds(
+            sso.config.session_ttl.num_seconds(),
+        ))
         .finish();
     let mut clear_state = Cookie::build(STATE_COOKIE, "").path("/auth").finish();
     clear_state.make_removal();
@@ -151,18 +153,21 @@ pub async fn callback(
         Some(target) => HttpResponse::Found()
             .insert_header((header::LOCATION, target.as_str()))
             .finish(),
-        None => HttpResponse::Ok().json(LoginResponse { guest, token, expires_at }),
+        None => HttpResponse::Ok().json(LoginResponse {
+            guest,
+            token,
+            expires_at,
+        }),
     };
-    resp.add_cookie(&session_cookie).map_err(|e| AppError::LoginFailed(e.to_string()))?;
-    resp.add_cookie(&clear_state).map_err(|e| AppError::LoginFailed(e.to_string()))?;
+    resp.add_cookie(&session_cookie)
+        .map_err(|e| AppError::LoginFailed(e.to_string()))?;
+    resp.add_cookie(&clear_state)
+        .map_err(|e| AppError::LoginFailed(e.to_string()))?;
     Ok(resp)
 }
 
 /// Ends the current session (Bearer token or cookie).
-pub async fn logout(
-    req: HttpRequest,
-    db: web::Data<Db>,
-) -> Result<HttpResponse, AppError> {
+pub async fn logout(req: HttpRequest, db: web::Data<Db>) -> Result<HttpResponse, AppError> {
     let token = session_token(&req).ok_or(AppError::Unauthorized)?;
     if !delete_session(&db, &token).await? {
         return Err(AppError::Unauthorized);

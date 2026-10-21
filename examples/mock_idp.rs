@@ -21,8 +21,8 @@ use openidconnect::core::{
 use openidconnect::url::Url;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, EndUserEmail, EndUserName, IssuerUrl, JsonWebKeyId,
-    LocalizedClaim, Nonce, PkceCodeChallenge, PkceCodeVerifier, PrivateSigningKey,
-    StandardClaims, SubjectIdentifier,
+    LocalizedClaim, Nonce, PkceCodeChallenge, PkceCodeVerifier, PrivateSigningKey, StandardClaims,
+    SubjectIdentifier,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -63,7 +63,9 @@ async fn discovery(idp: web::Data<Idp>) -> HttpResponse {
 }
 
 async fn jwks(idp: web::Data<Idp>) -> HttpResponse {
-    HttpResponse::Ok().json(CoreJsonWebKeySet::new(vec![idp.signing_key().as_verification_key()]))
+    HttpResponse::Ok().json(CoreJsonWebKeySet::new(vec![
+        idp.signing_key().as_verification_key(),
+    ]))
 }
 
 async fn authorize(idp: web::Data<Idp>, q: web::Query<HashMap<String, String>>) -> HttpResponse {
@@ -88,7 +90,10 @@ async fn authorize(idp: web::Data<Idp>, q: web::Query<HashMap<String, String>>) 
             code.clone(),
             Grant {
                 name: q.get("name").cloned().unwrap_or_else(|| subject.clone()),
-                email: q.get("email").cloned().unwrap_or_else(|| format!("{subject}@example.com")),
+                email: q
+                    .get("email")
+                    .cloned()
+                    .unwrap_or_else(|| format!("{subject}@example.com")),
                 subject,
                 nonce: get("nonce"),
                 code_challenge: get("code_challenge"),
@@ -99,12 +104,17 @@ async fn authorize(idp: web::Data<Idp>, q: web::Query<HashMap<String, String>>) 
             .append_pair("code", &code)
             .append_pair("state", &get("state"));
     }
-    HttpResponse::Found().insert_header((header::LOCATION, redirect.to_string())).finish()
+    HttpResponse::Found()
+        .insert_header((header::LOCATION, redirect.to_string()))
+        .finish()
 }
 
 async fn token(idp: web::Data<Idp>, form: web::Form<HashMap<String, String>>) -> HttpResponse {
     let invalid_grant = || HttpResponse::BadRequest().json(json!({ "error": "invalid_grant" }));
-    let Some(grant) = form.get("code").and_then(|c| idp.grants.lock().unwrap().remove(c)) else {
+    let Some(grant) = form
+        .get("code")
+        .and_then(|c| idp.grants.lock().unwrap().remove(c))
+    else {
         return invalid_grant();
     };
     let verifier = PkceCodeVerifier::new(form.get("code_verifier").cloned().unwrap_or_default());
@@ -145,7 +155,8 @@ async fn token(idp: web::Data<Idp>, form: web::Form<HashMap<String, String>>) ->
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let addr = std::env::var("MOCK_IDP_ADDR").unwrap_or_else(|_| "127.0.0.1:18081".into());
-    let key_path = std::env::var("MOCK_IDP_KEY").map_err(|_| std::io::Error::other("MOCK_IDP_KEY must be set"))?;
+    let key_path = std::env::var("MOCK_IDP_KEY")
+        .map_err(|_| std::io::Error::other("MOCK_IDP_KEY must be set"))?;
     let idp = web::Data::new(Idp {
         issuer: format!("http://{addr}"),
         client_id: std::env::var("MOCK_IDP_CLIENT_ID").unwrap_or_else(|_| "event-manager".into()),
@@ -158,7 +169,10 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(idp.clone())
-            .route("/.well-known/openid-configuration", web::get().to(discovery))
+            .route(
+                "/.well-known/openid-configuration",
+                web::get().to(discovery),
+            )
             .route("/jwks", web::get().to(jwks))
             .route("/authorize", web::get().to(authorize))
             .route("/token", web::post().to(token))

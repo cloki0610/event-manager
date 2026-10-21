@@ -30,7 +30,8 @@ pub async fn create_session(
     let token = generate_token();
     let now = Utc::now();
     let expires_at = now + ttl;
-    db.insert_session(&hash_token(&token), guest_id, now, expires_at).await?;
+    db.insert_session(&hash_token(&token), guest_id, now, expires_at)
+        .await?;
     Ok((token, expires_at))
 }
 
