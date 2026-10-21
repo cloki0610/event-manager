@@ -1,19 +1,18 @@
 use actix_web::cookie::{Cookie, SameSite, time};
 use actix_web::http::header;
 use actix_web::{HttpRequest, HttpResponse, web};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use openidconnect::core::CoreAuthenticationFlow;
 use openidconnect::{
     AuthorizationCode, CsrfToken, Nonce, PkceCodeChallenge, PkceCodeVerifier, Scope,
     TokenResponse,
 };
 use serde::Deserialize;
-use sqlx::SqlitePool;
-use uuid::Uuid;
 
 use crate::auth::{SESSION_COOKIE, create_session, delete_session, session_token};
+use crate::db::{Db, GuestClaims};
 use crate::error::AppError;
-use crate::models::{Guest, LoginResponse};
+use crate::models::LoginResponse;
 use crate::sso::Sso;
 
 /// Binds an in-flight login to the browser that started it (prevents login CSRF).
@@ -22,7 +21,7 @@ const LOGIN_TIMEOUT_MINUTES: i64 = 10;
 
 /// Starts the authorization-code flow (with PKCE) by redirecting to the provider.
 pub async fn login(
-    pool: web::Data<SqlitePool>,
+    db: web::Data<Db>,
     sso: web::Data<Sso>,
 ) -> Result<HttpResponse, AppError> {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -39,18 +38,13 @@ pub async fn login(
         .url();
 
     let now = Utc::now();
-    sqlx::query("DELETE FROM login_states WHERE created_at < ?")
-        .bind(now - Duration::minutes(LOGIN_TIMEOUT_MINUTES))
-        .execute(pool.get_ref())
-        .await?;
-    sqlx::query(
-        "INSERT INTO login_states (state, nonce, pkce_verifier, created_at) VALUES (?, ?, ?, ?)",
+    db.insert_login_state(
+        state.secret(),
+        nonce.secret(),
+        pkce_verifier.secret(),
+        now,
+        now - Duration::minutes(LOGIN_TIMEOUT_MINUTES),
     )
-    .bind(state.secret())
-    .bind(nonce.secret())
-    .bind(pkce_verifier.secret())
-    .bind(now)
-    .execute(pool.get_ref())
     .await?;
 
     let state_cookie = Cookie::build(STATE_COOKIE, state.secret().clone())
@@ -78,7 +72,7 @@ pub struct CallbackParams {
 /// Completes the login: verifies the ID token, upserts the guest and starts a session.
 pub async fn callback(
     req: HttpRequest,
-    pool: web::Data<SqlitePool>,
+    db: web::Data<Db>,
     sso: web::Data<Sso>,
     params: web::Query<CallbackParams>,
 ) -> Result<HttpResponse, AppError> {
@@ -99,12 +93,7 @@ pub async fn callback(
     }
 
     // Single use: the row is consumed whether or not the rest of the login succeeds.
-    let pending: Option<(String, String, DateTime<Utc>)> = sqlx::query_as(
-        "DELETE FROM login_states WHERE state = ? RETURNING nonce, pkce_verifier, created_at",
-    )
-    .bind(&state)
-    .fetch_optional(pool.get_ref())
-    .await?;
+    let pending = db.take_login_state(&state).await?;
     let Some((nonce, pkce_verifier, created_at)) = pending else {
         return Err(AppError::LoginFailed("unknown or already used state".into()));
     };
@@ -138,25 +127,15 @@ pub async fn callback(
         .or_else(|| email.clone())
         .unwrap_or_else(|| subject.to_string());
 
-    let now = Utc::now();
-    let guest = sqlx::query_as::<_, Guest>(
-        "INSERT INTO guests (id, issuer, subject, name, email, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT (issuer, subject) DO UPDATE SET \
-             name = excluded.name, email = excluded.email, updated_at = excluded.updated_at \
-         RETURNING id, name, email, created_at",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(claims.issuer().as_str())
-    .bind(subject)
-    .bind(&name)
-    .bind(&email)
-    .bind(now)
-    .bind(now)
-    .fetch_one(pool.get_ref())
-    .await?;
+    let claims = GuestClaims {
+        issuer: claims.issuer().as_str(),
+        subject,
+        name: &name,
+        email: email.as_deref(),
+    };
+    let guest = db.upsert_guest(&claims, Utc::now()).await?;
 
-    let (token, expires_at) = create_session(&pool, &guest.id, sso.config.session_ttl).await?;
+    let (token, expires_at) = create_session(&db, &guest.id, sso.config.session_ttl).await?;
 
     let session_cookie = Cookie::build(SESSION_COOKIE, token.clone())
         .path("/")
@@ -182,10 +161,10 @@ pub async fn callback(
 /// Ends the current session (Bearer token or cookie).
 pub async fn logout(
     req: HttpRequest,
-    pool: web::Data<SqlitePool>,
+    db: web::Data<Db>,
 ) -> Result<HttpResponse, AppError> {
     let token = session_token(&req).ok_or(AppError::Unauthorized)?;
-    if !delete_session(&pool, &token).await? {
+    if !delete_session(&db, &token).await? {
         return Err(AppError::Unauthorized);
     }
     let mut clear = Cookie::build(SESSION_COOKIE, "").path("/").finish();

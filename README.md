@@ -1,6 +1,7 @@
 # event-manager
 
-A small REST API for managing events and their guests, built with **actix-web** and **sqlx** (SQLite).
+A small REST API for managing events and their guests, built with **actix-web** and **sqlx** (SQLite),
+with optional **DuckDB** storage.
 
 ## Running
 
@@ -16,6 +17,22 @@ cargo test
 | `RUST_LOG`     | `info`               |
 
 Migrations in `migrations/` are embedded and applied at startup.
+
+### DuckDB
+
+DuckDB support is behind the `duckdb` cargo feature, because it compiles DuckDB from C++ source
+(several minutes on the first build). Select it with a `duckdb://` URL:
+
+```sh
+DATABASE_URL=duckdb://events.duckdb cargo run --features duckdb
+TEST_DATABASE_URL=duckdb://:memory: cargo test --features duckdb   # run the suite on DuckDB
+```
+
+The DuckDB schema (`src/db/duckdb_schema.sql`) is created at startup if missing. It has no
+versioned migrations yet. DuckDB has no `ON DELETE CASCADE`, so deletes cascade in application
+code. DuckDB allows only one process to open a database file for writing, so tools like the
+`duckdb` CLI cannot open the file while the server is running. A build without the feature
+refuses `duckdb://` URLs at startup.
 
 ### Single sign-on
 

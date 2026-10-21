@@ -16,6 +16,12 @@ pub enum AppError {
     LoginFailed(String),
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    #[cfg(feature = "duckdb")]
+    #[error("database error")]
+    DuckDb(#[from] duckdb::Error),
+    /// A blocking database task panicked or was cancelled.
+    #[error("database error")]
+    Blocking(String),
 }
 
 impl ResponseError for AppError {
@@ -25,13 +31,18 @@ impl ResponseError for AppError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Unauthorized | AppError::LoginFailed(_) => StatusCode::UNAUTHORIZED,
-            AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::Database(_) | AppError::Blocking(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            #[cfg(feature = "duckdb")]
+            AppError::DuckDb(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     fn error_response(&self) -> HttpResponse {
         match self {
             AppError::Database(err) => log::error!("database error: {err}"),
+            AppError::Blocking(err) => log::error!("database task failed: {err}"),
+            #[cfg(feature = "duckdb")]
+            AppError::DuckDb(err) => log::error!("database error: {err}"),
             AppError::LoginFailed(detail) => log::warn!("SSO login failed: {detail}"),
             _ => {}
         }

@@ -6,6 +6,7 @@ use actix_web::dev::{Service, ServiceResponse};
 use actix_web::http::StatusCode;
 use actix_web::{App, HttpResponse, HttpServer, test, web};
 use chrono::{Duration, Utc};
+use event_manager::db::Db;
 use event_manager::models::{Attendee, Event, Guest, LoginResponse};
 use event_manager::sso::{Sso, SsoConfig};
 use openidconnect::core::{
@@ -151,10 +152,12 @@ async fn setup() -> (
     .await
     .unwrap();
     // A single connection keeps every query on the same in-memory database.
-    let pool = event_manager::init_db("sqlite::memory:", 1).await.unwrap();
+    // TEST_DATABASE_URL=duckdb://:memory: runs the suite against DuckDB (needs `--features duckdb`).
+    let url = std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".into());
+    let db = Db::connect(&url, 1).await.unwrap();
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(pool))
+            .app_data(web::Data::new(db))
             .app_data(web::Data::new(sso))
             .configure(event_manager::configure),
     )
