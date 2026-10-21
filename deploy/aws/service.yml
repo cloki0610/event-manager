@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  event-manager service. One Fargate task behind an Application Load Balancer, with the SQLite
+  database on EFS. Deployed by .github/workflows/deploy.yml on every push to main.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Full image reference, e.g. <account>.dkr.ecr.<region>.amazonaws.com/event-manager:<sha>
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Exactly two public subnets in different availability zones.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate for HTTPS. Empty serves plain HTTP (test environments only).
+  PublicUrl:
+    Type: String
+    Default: ""
+    Description: Base URL users reach, e.g. https://events.example.com. Empty uses the load balancer's DNS name over HTTP.
+  OidcIssuerUrl:
+    Type: String
+  OidcClientId:
+    Type: String
+  OidcClientSecretArn:
+    Type: String
+    Default: ""
+    Description: Secrets Manager secret holding the client secret. Empty for public clients.
+  PostLoginRedirect:
+    Type: String
+    Default: ""
+  SessionTtlHours:
+    Type: Number
+    Default: 168
+    MinValue: 1
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  HasPublicUrl: !Not [!Equals [!Ref PublicUrl, ""]]
+  HasClientSecret: !Not [!Equals [!Ref OidcClientSecretArn, ""]]
+
+Resources:
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: event-manager load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: event-manager tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  FileSystemSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: event-manager database volume
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroups: [!Ref FileSystemSecurityGroup]
+
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [1, !Ref SubnetIds]
+      SecurityGroups: [!Ref FileSystemSecurityGroup]
+
+  # Matches the image's non-root user (uid 10001).
+  AccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: { Uid: "10001", Gid: "10001" }
+      RootDirectory:
+        Path: /event-manager
+        CreationInfo: { OwnerUid: "10001", OwnerGid: "10001", Permissions: "750" }
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8080
+      HealthCheckPath: /events
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: "10" }
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig: { Protocol: HTTPS, Port: "443", StatusCode: HTTP_301 }
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies: !If
+        - HasClientSecret
+        - - PolicyName: read-oidc-secret
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref OidcClientSecretArn
+        - !Ref AWS::NoValue
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref AWS::StackName
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      RuntimePlatform: { CpuArchitecture: X86_64, OperatingSystemFamily: LINUX }
+      Volumes:
+        - Name: data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref FileSystem
+            TransitEncryption: ENABLED
+            AuthorizationConfig: { AccessPointId: !Ref AccessPoint }
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings: [{ ContainerPort: 8080 }]
+          MountPoints: [{ SourceVolume: data, ContainerPath: /data }]
+          Environment:
+            - { Name: DATABASE_URL, Value: sqlite:///data/events.db }
+            - { Name: OIDC_ISSUER_URL, Value: !Ref OidcIssuerUrl }
+            - { Name: OIDC_CLIENT_ID, Value: !Ref OidcClientId }
+            - Name: OIDC_REDIRECT_URL
+              Value: !If
+                - HasPublicUrl
+                - !Sub ${PublicUrl}/auth/callback
+                - !Sub http://${LoadBalancer.DNSName}/auth/callback
+            - { Name: POST_LOGIN_REDIRECT, Value: !Ref PostLoginRedirect }
+            - { Name: SESSION_TTL_HOURS, Value: !Ref SessionTtlHours }
+          Secrets: !If
+            - HasClientSecret
+            - - { Name: OIDC_CLIENT_SECRET, ValueFrom: !Ref OidcClientSecretArn }
+            - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+
+  # SQLite allows one writer, so exactly one task runs: a deploy stops the old task before
+  # starting the new one (a short outage) instead of overlapping them on the same file.
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpListener, MountTargetA, MountTargetB]
+    Properties:
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker: { Enable: true, Rollback: true }
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups: [!Ref ServiceSecurityGroup]
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  Url:
+    Value: !If [HasPublicUrl, !Ref PublicUrl, !Sub "http://${LoadBalancer.DNSName}"]
+  LoadBalancerDnsName:
+    Description: Point the PublicUrl domain here (CNAME or Route 53 alias).
+    Value: !GetAtt LoadBalancer.DNSName
+  RedirectUri:
+    Description: Register this with the OpenID Connect provider.
+    Value: !If
+      - HasPublicUrl
+      - !Sub ${PublicUrl}/auth/callback
+      - !Sub http://${LoadBalancer.DNSName}/auth/callback

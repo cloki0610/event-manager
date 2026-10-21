@@ -56,6 +56,60 @@ service if the provider rotates its keys.
 > If the GNU toolchain's gcc is broken, use the MSVC toolchain instead:
 > `cargo +stable-x86_64-pc-windows-msvc run`.
 
+## CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request: `cargo fmt --check`, clippy with warnings
+denied, the test suite on SQLite and again on DuckDB, and a container image build.
+
+`.github/workflows/deploy.yml` runs on every push to `main` (or by hand). It reruns CI, builds the
+`Dockerfile`, pushes the image to Amazon ECR tagged with the commit SHA, and deploys
+`deploy/aws/service.yml` with CloudFormation. GitHub authenticates to AWS through OpenID Connect,
+so no AWS keys are stored in the repository.
+
+### AWS layout
+
+One Fargate task runs behind an Application Load Balancer. The SQLite database lives on an
+encrypted EFS volume with AWS Backup enabled, so it survives redeploys. SQLite allows a single
+writer, so the service runs exactly one task and a deploy stops the old task before starting the
+new one. Expect a short outage on each deploy. A failed deploy rolls back automatically.
+
+### One-time setup
+
+1. Deploy the bootstrap stack. It creates the ECR repository, the role GitHub assumes, and the role
+   CloudFormation uses to create the service. Skip the OIDC provider if the account already has one.
+
+   ```sh
+   aws cloudformation deploy --stack-name event-manager-bootstrap \
+     --template-file deploy/aws/bootstrap.yml --capabilities CAPABILITY_IAM \
+     --parameter-overrides GitHubRepo=<owner>/<repo>   # CreateOidcProvider=false if it exists
+   ```
+
+2. Store the OIDC client secret, if your provider issues one:
+   `aws secretsmanager create-secret --name event-manager/oidc-client-secret --secret-string '<secret>'`.
+3. In GitHub, create the `production` environment (Settings, Environments) and add these
+   variables. Add required reviewers to the environment to gate releases.
+
+   | Variable                     | Value |
+   |------------------------------|-------|
+   | `AWS_REGION`                 | e.g. `eu-west-1` |
+   | `AWS_DEPLOY_ROLE_ARN`        | bootstrap output `DeployRoleArn` |
+   | `AWS_CFN_EXECUTION_ROLE_ARN` | bootstrap output `CloudFormationExecutionRoleArn` |
+   | `VPC_ID`                     | VPC to run in (the default VPC works) |
+   | `SUBNET_IDS`                 | two public subnets in different AZs, comma separated |
+   | `OIDC_ISSUER_URL`            | as in [Single sign-on](#single-sign-on) |
+   | `OIDC_CLIENT_ID`             | as in [Single sign-on](#single-sign-on) |
+   | `OIDC_CLIENT_SECRET_ARN`     | ARN from step 2, or empty |
+   | `CERTIFICATE_ARN`            | ACM certificate for HTTPS, or empty for plain HTTP |
+   | `PUBLIC_URL`                 | e.g. `https://events.example.com`, or empty to use the load balancer's address |
+   | `POST_LOGIN_REDIRECT`        | optional |
+
+4. Push to `main`. The first run creates the service stack. Its `RedirectUri` output is the URI to
+   register with the OIDC provider. With `PUBLIC_URL` set, point that domain at the
+   `LoadBalancerDnsName` output.
+
+Use HTTPS (`CERTIFICATE_ARN` plus `PUBLIC_URL`) for anything real. Over plain HTTP the session
+token travels in clear text.
+
 ## API
 
 All bodies are JSON. Errors look like `{"error": "..."}`. Timestamps are RFC 3339.
