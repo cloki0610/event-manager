@@ -1,5 +1,6 @@
 /target
 *.pem
+!tests/fixtures/*.pem
 *.db
 *.db-shm
 *.db-wal
