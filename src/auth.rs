@@ -2,9 +2,9 @@ use actix_web::HttpRequest;
 use actix_web::http::header;
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::db::Db;
 use crate::error::AppError;
 use crate::models::Guest;
 
@@ -23,38 +23,21 @@ pub fn hash_token(token: &str) -> String {
 
 /// Starts a session for `guest_id` and returns its token and expiry.
 pub async fn create_session(
-    pool: &SqlitePool,
+    db: &Db,
     guest_id: &str,
     ttl: Duration,
 ) -> Result<(String, DateTime<Utc>), AppError> {
     let token = generate_token();
     let now = Utc::now();
     let expires_at = now + ttl;
-
-    sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
-        .bind(now)
-        .execute(pool)
+    db.insert_session(&hash_token(&token), guest_id, now, expires_at)
         .await?;
-    sqlx::query(
-        "INSERT INTO sessions (token_hash, guest_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-    )
-    .bind(hash_token(&token))
-    .bind(guest_id)
-    .bind(now)
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
-
     Ok((token, expires_at))
 }
 
 /// Ends the session identified by `token`. Returns false if it did not exist.
-pub async fn delete_session(pool: &SqlitePool, token: &str) -> Result<bool, AppError> {
-    let result = sqlx::query("DELETE FROM sessions WHERE token_hash = ?")
-        .bind(hash_token(token))
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
+pub async fn delete_session(db: &Db, token: &str) -> Result<bool, AppError> {
+    db.delete_session(&hash_token(token)).await
 }
 
 /// Extracts the session token from `Authorization: Bearer <token>` or the session cookie.
@@ -75,17 +58,9 @@ pub fn session_token(req: &HttpRequest) -> Option<String> {
 }
 
 /// Resolves the guest owning the request's (unexpired) session.
-pub async fn authenticate(req: &HttpRequest, pool: &SqlitePool) -> Result<Guest, AppError> {
+pub async fn authenticate(req: &HttpRequest, db: &Db) -> Result<Guest, AppError> {
     let token = session_token(req).ok_or(AppError::Unauthorized)?;
-
-    sqlx::query_as::<_, Guest>(
-        "SELECT g.id, g.name, g.email, g.created_at \
-         FROM sessions s JOIN guests g ON g.id = s.guest_id \
-         WHERE s.token_hash = ? AND s.expires_at > ?",
-    )
-    .bind(hash_token(&token))
-    .bind(Utc::now())
-    .fetch_optional(pool)
-    .await?
-    .ok_or(AppError::Unauthorized)
+    db.session_guest(&hash_token(&token), Utc::now())
+        .await?
+        .ok_or(AppError::Unauthorized)
 }

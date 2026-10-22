@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod db;
 pub mod error;
 pub mod handlers;
 pub mod models;
@@ -13,6 +14,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use crate::error::AppError;
 
 /// Connects to the SQLite database at `url` and applies pending migrations.
+/// Use [`db::Db::connect`] to pick the backend from the URL.
 pub async fn init_db(url: &str, max_connections: u32) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::from_str(url)?
         .create_if_missing(true)
@@ -25,7 +27,7 @@ pub async fn init_db(url: &str, max_connections: u32) -> Result<SqlitePool, sqlx
     Ok(pool)
 }
 
-/// Registers every route of the API. Requires `web::Data<SqlitePool>` and `web::Data<sso::Sso>`.
+/// Registers every route of the API. Requires `web::Data<db::Db>` and `web::Data<sso::Sso>`.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.app_data(
         web::JsonConfig::default()
@@ -42,7 +44,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/{id}", web::get().to(handlers::events::get))
             .route("/{id}", web::patch().to(handlers::events::update))
             .route("/{id}", web::delete().to(handlers::events::delete))
-            .route("/{id}/attendees", web::get().to(handlers::attendance::attendees))
+            .route(
+                "/{id}/attendees",
+                web::get().to(handlers::attendance::attendees),
+            )
             .route("/{id}/join", web::post().to(handlers::attendance::join))
             .route("/{id}/leave", web::post().to(handlers::attendance::leave)),
     )

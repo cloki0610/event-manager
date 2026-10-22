@@ -89,7 +89,11 @@ impl Sso {
         )
         .set_redirect_uri(redirect);
 
-        Ok(Self { client, http, config })
+        Ok(Self {
+            client,
+            http,
+            config,
+        })
     }
 
     /// Cookies are marked `Secure` whenever the service is reached over HTTPS.
