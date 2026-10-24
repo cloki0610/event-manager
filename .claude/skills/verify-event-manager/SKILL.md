@@ -1,15 +1,15 @@
 ---
 name: verify-event-manager
-description: Launch an isolated event-manager REST API (actix-web, SQLite or DuckDB storage) with a mock OpenID Connect provider, sign guests in through the real SSO flow, drive events/attendance endpoints with curl, and capture HTTP + database evidence. Use to prove a change to event-manager works end to end, not just in `cargo test`.
+description: Launch an isolated event-manager REST API (Rust Cloudflare Worker on D1, served by `wrangler dev`) with a mock OpenID Connect provider, sign guests in through the real SSO flow, drive events/attendance endpoints with curl, and capture HTTP + database evidence. Use to prove a change to event-manager works end to end, not just in `cargo test`.
 ---
 
 # Verify event-manager
 
-event-manager is a JSON REST API; its users are HTTP clients. Guests sign in through an OIDC provider, so this skill runs a stand-in provider (`examples/mock_idp.rs`) next to the real binary. Everything else is the production code path.
+event-manager is a JSON REST API; its users are HTTP clients. Guests sign in through an OIDC provider, so this skill runs a stand-in provider (`e2e/src/bin/mock_idp.rs`) next to the real Worker under `wrangler dev --local`, which runs it in workerd, the same runtime Cloudflare uses, against a local D1. Everything else is the production code path.
 
 All commands run from the repo root in bash (Git Bash on Windows). Helpers live in `.claude/skills/verify-event-manager/scripts/`; below, `S=.claude/skills/verify-event-manager/scripts`.
 
-Requirements on PATH: `cargo`, `curl`, `openssl`. `sqlite3` is optional (only `db.sh` needs it).
+Requirements on PATH: `cargo` (with the `wasm32-unknown-unknown` target and `worker-build`), `node`, `curl`, `openssl`. Run `npm ci` once for the pinned wrangler.
 
 ## Launch
 
@@ -18,13 +18,13 @@ S=.claude/skills/verify-event-manager/scripts
 R=$($S/up.sh)            # or: $S/up.sh my-run-id
 ```
 
-`up.sh` builds `event-manager` and the `mock_idp` example, generates a throwaway RSA key, starts the mock provider, then starts the app on a fresh SQLite file with `OIDC_*` pointed at the provider. Migrations run at startup. It returns only when the app logged `listening on` **and** `GET /events` returns 200, and prints the run id as its last stdout line. Progress goes to stderr. On any failure it prints the log and tears itself down.
+`up.sh` builds the `mock_idp` binary, generates a throwaway RSA key, starts the mock provider, applies `migrations/` to a fresh local D1, then starts `wrangler dev` (which builds the Worker) with `OIDC_*` pointed at the provider. It returns only when `GET /events` returns 200, and prints the run id as its last stdout line. Progress goes to stderr. On any failure it prints the log and tears itself down.
 
-- Ports: app on `VERIFY_APP_PORT` (default 18080), provider on the next free port. Busy ports are skipped, so several runs can coexist. The app's own default (`127.0.0.1:8080`, `./events.db`) is never used. Never drive a server you did not start with `up.sh`.
+- Ports: app on `VERIFY_APP_PORT` (default 18080), provider on the next free port. Busy ports are skipped, so several runs can coexist. A developer's own `wrangler dev` (port 8787, `.wrangler/state`) is never used. Never drive a server you did not start with `up.sh`.
 - Run layout: `target/verify/<run-id>/state/` (db, key, pids, cookie jars, logs) and `target/verify/<run-id>/evidence/`.
-- First build takes about 2 minutes. Wrap calls in a timeout so a hang can't stall you (`timeout 300 $S/up.sh`).
+- The first Worker build takes a few minutes. Wrap calls in a timeout so a hang can't stall you (`timeout 900 $S/up.sh`).
 - If the GNU toolchain's gcc is broken (see README), set `VERIFY_TOOLCHAIN=+stable-x86_64-pc-windows-msvc`.
-- Storage backend: `VERIFY_DB=duckdb $S/up.sh` builds with `--features duckdb` and serves from `state/events.duckdb`. The default is SQLite. When a change touches `src/db/`, run the relevant feature recipes once per backend. DuckDB's first build compiles C++ for several minutes, so use `timeout 900`.
+- Restart checks: `VERIFY_PERSIST=target/verify/<dir> $S/up.sh` keeps the D1 data outside the run's `state/`, so `down.sh` leaves it and a second `up.sh` with the same `VERIFY_PERSIST` serves the same data.
 
 ## Doctor
 
@@ -32,7 +32,7 @@ R=$($S/up.sh)            # or: $S/up.sh my-run-id
 $S/doctor.sh "$R"        # exit 0 = worth driving
 ```
 
-Read-only. Checks that both processes are alive, `GET /events` is 200, the provider's issuer matches, the DB file exists, the binary is newer than `src/`, `migrations/` and `Cargo.toml` (otherwise rerun `up.sh`), and that the app port is owned by the app process we started (netstat winpid on Windows, `ss` on Linux). Run it first and again whenever a response surprises you.
+Read-only. Checks that both processes are alive, `GET /events` is 200, the provider's issuer matches, the D1 persist dir exists, and that the app port is owned by a `workerd` process (netstat + tasklist on Windows, `ss` on Linux). `wrangler dev` rebuilds on source changes under `worker/src`, so a stale build shows up in `state/app.log`. Run it first and again whenever a response surprises you.
 
 ## Drive
 
@@ -55,13 +55,12 @@ $S/req.sh "$R" join   POST /events/$ID/join - "$TOKEN"
 
 It prints the response body and reports `HTTP <status>  (<evidence file>)` on stderr. It exits 0 for any HTTP status, so check the status yourself. To get an id from a body without jq: `sed -n 's/.*"id":"\([^"]*\)".*/\1/p'`.
 
-Look at stored state read-only (SQLite runs only):
+Look at stored state read-only (`SELECT`/`WITH` only, through `wrangler d1 execute --local`):
 
 ```sh
 $S/db.sh "$R" <label> "SELECT ... FROM events|guests|sessions|attendances|login_states"
 ```
 
-On a DuckDB run, `db.sh` refuses, because the server holds DuckDB's single-writer lock on the file. Prove stored state through a second API view instead (`GET /events/{id}`, `/attendees`, `/guests/me/events`).
 
 Per-feature recipes are in [`features/README.md`](features/README.md). Use them, and drive every entry point a feature file lists.
 
@@ -87,7 +86,7 @@ Proof standards:
 $S/down.sh "$R"
 ```
 
-Kills only the two PIDs this run started, copies the logs into `evidence/`, deletes `state/` (DB, key, cookie jars), and warns if a port is still listening. Evidence stays at `target/verify/<run-id>/evidence/`. `cargo clean` deletes it, so copy anything you want to keep long-term. Run `down.sh` after failed attempts too. If a launch was interrupted, look for a leftover `up.sh` with `ps` and kill that PID, never by process name.
+Kills only the two process trees this run started (wrangler's `workerd` child included), copies the logs into `evidence/`, deletes `state/` (DB, key, cookie jars), and warns if a port is still listening. Evidence stays at `target/verify/<run-id>/evidence/`. `cargo clean` deletes it, so copy anything you want to keep long-term. Run `down.sh` after failed attempts too. If a launch was interrupted, look for a leftover `up.sh` with `ps` and kill that PID, never by process name.
 
 ## What the stand-in does not cover
 

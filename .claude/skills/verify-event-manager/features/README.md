@@ -4,10 +4,10 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Start a fresh instance with `R=$($S/up.sh)`, where `S=.claude/skills/verify-event-manager/scripts`. It gets its own ports and an empty SQLite database, with migrations applied.
+- Start a fresh instance with `R=$($S/up.sh)`, where `S=.claude/skills/verify-event-manager/scripts`. It gets its own ports and an empty local D1 database, with migrations applied.
 - `$S/doctor.sh "$R"` exits 0.
 - No seed data: every recipe creates the events and guests it needs.
-- Never drive an instance that was not started by this verification run, including a developer's own `cargo run` on port 8080.
+- Never drive an instance that was not started by this verification run, including a developer's own `wrangler dev` on port 8787.
 
 ## Driving conventions
 

@@ -12,22 +12,17 @@ check "app process $APP_PID alive" 'alive "$APP_PID"'
 check "mock idp process $IDP_PID alive" 'alive "$IDP_PID"'
 check "GET $BASE/events -> 200" '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/events")" = 200 ]'
 check "idp discovery issuer is $IDP" 'curl -s "$IDP/.well-known/openid-configuration" | grep -q "\"issuer\":\"$IDP\""'
-check "${DB_KIND} database file $DB_FILE exists" '[ -f "$DB_FILE" ]'
+check "local D1 persist dir $PERSIST exists" '[ -d "$PERSIST" ]'
 
-bin=target/debug/event-manager
-[ -f "$bin.exe" ] && bin="$bin.exe"
-stale=$(find src migrations Cargo.toml -newer "$bin" -type f 2>/dev/null | head -3)
-check "binary built after last source change${stale:+ (newer: $stale)}" '[ -z "$stale" ]'
-
-# Port ownership: the listener must be the process up.sh started, not someone else's server.
-if [ -r "/proc/$APP_PID/winpid" ]; then
-  winpid=$(cat "/proc/$APP_PID/winpid")
-  check "port $APP_PORT owned by app (winpid $winpid)" \
-    'netstat -ano | tr -d "\r" | grep -E "127\.0\.0\.1:$APP_PORT .*LISTENING" | grep -qw "$winpid"'
+# The Worker listens from a workerd child of wrangler, so the listener must be a workerd process.
+if command -v netstat >/dev/null && command -v tasklist >/dev/null; then
+  lpid=$(netstat -ano | tr -d "\r" | grep -E "127\.0\.0\.1:$APP_PORT .*LISTENING" | awk '{print $NF}' | head -1)
+  check "port $APP_PORT owned by workerd (pid ${lpid:-none})" \
+    '[ -n "$lpid" ] && tasklist //FI "PID eq $lpid" //NH | grep -qi workerd'
 elif command -v ss >/dev/null; then
-  check "port $APP_PORT owned by app (pid $APP_PID)" 'ss -ltnpH "sport = :$APP_PORT" | grep -q "pid=$APP_PID,"'
+  check "port $APP_PORT owned by workerd" 'ss -ltnpH "sport = :$APP_PORT" | grep -q workerd'
 else
-  echo "skip port ownership (no /proc winpid or ss)"
+  echo "skip port ownership (no netstat+tasklist or ss)"
 fi
 
 exit $bad

@@ -12,13 +12,19 @@ EV="$RUN/evidence"
 
 for pid in ${APP_PID:-} ${IDP_PID:-}; do
   alive "$pid" || continue
-  kill "$pid" 2>/dev/null
+  # wrangler dev serves from a workerd child process, so stop the whole tree.
+  if [ -r "/proc/$pid/winpid" ]; then
+    taskkill //T //F //PID "$(cat "/proc/$pid/winpid")" >/dev/null 2>&1
+  else
+    pkill -TERM -P "$pid" 2>/dev/null
+    kill "$pid" 2>/dev/null
+  fi
   for _ in $(seq 20); do alive "$pid" || break; sleep 0.25; done
   alive "$pid" && kill -9 "$pid" 2>/dev/null
 done
 
 mkdir -p "$EV"
-for log in app.log idp.log; do [ -f "$STATE/$log" ] && cp "$STATE/$log" "$EV/$log"; done
+for log in app.log idp.log migrate.log; do [ -f "$STATE/$log" ] && cp "$STATE/$log" "$EV/$log"; done
 rm -rf "$STATE"
 
 for p in ${APP_PORT:-} ${IDP_PORT:-}; do
