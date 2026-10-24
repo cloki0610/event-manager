@@ -1,0 +1,15 @@
+name = "event-manager"
+main = "worker/build/worker/shim.mjs"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "worker-build --release"
+cwd = "worker"
+watch_dir = "worker/src"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "event-manager"
+# Replace with the id printed by `npx wrangler d1 create event-manager`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

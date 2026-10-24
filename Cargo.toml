@@ -33,3 +33,8 @@ actix-http = "3"
 
 [features]
 duckdb = ["dep:duckdb"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

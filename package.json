@@ -1,0 +1,7 @@
+{
+  "name": "event-manager",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "4.152.0"
+  }
+}

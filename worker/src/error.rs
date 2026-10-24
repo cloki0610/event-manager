@@ -48,3 +48,8 @@ impl AppError {
 pub fn is_unique_violation(err: &worker::Error) -> bool {
     err.to_string().contains("UNIQUE constraint failed")
 }
+
+/// For worker API failures outside the database (headers, bodies, responses).
+pub fn internal(err: worker::Error) -> AppError {
+    AppError::Internal(err.to_string())
+}
