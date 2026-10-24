@@ -7,3 +7,7 @@
 *.duckdb
 *.duckdb.wal
 .env
+/node_modules
+/worker/build
+.wrangler
+.dev.vars
