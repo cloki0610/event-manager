@@ -25,6 +25,10 @@ cargo test -p e2e                                 # builds the Worker, runs the 
 
 `wrangler dev` reads Worker variables from a `.dev.vars` file (git-ignored), one `KEY=value` per line.
 
+On Windows, keep the checkout path short (under about 80 characters). The local D1 files nest
+deep enough under `target/` to pass the 260-character path limit, and wrangler then fails with
+an opaque "internal error".
+
 ### Single sign-on
 
 Guests sign in through any OpenID Connect provider (Google, Microsoft Entra ID, Okta, Keycloak,
