@@ -21,56 +21,51 @@ jobs:
     runs-on: ubuntu-24.04
     # Configure under Settings > Environments > production; add required reviewers to gate releases.
     environment: production
-    permissions:
-      contents: read
-      id-token: write
     env:
-      STACK_NAME: event-manager
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+      OIDC_ISSUER_URL: ${{ vars.OIDC_ISSUER_URL }}
+      OIDC_CLIENT_ID: ${{ vars.OIDC_CLIENT_ID }}
+      POST_LOGIN_REDIRECT: ${{ vars.POST_LOGIN_REDIRECT }}
+      SESSION_TTL_HOURS: ${{ vars.SESSION_TTL_HOURS }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - uses: docker/setup-buildx-action@v3
-
-      - id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.ecr.outputs.registry }}/event-manager:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Deploy service stack
+      - name: Check configuration
         run: |
-          aws cloudformation deploy \
-            --stack-name "$STACK_NAME" \
-            --template-file deploy/aws/service.yml \
-            --role-arn "${{ vars.AWS_CFN_EXECUTION_ROLE_ARN }}" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              "ImageUri=${{ steps.ecr.outputs.registry }}/event-manager:${{ github.sha }}" \
-              "VpcId=${{ vars.VPC_ID }}" \
-              "SubnetIds=${{ vars.SUBNET_IDS }}" \
-              "CertificateArn=${{ vars.CERTIFICATE_ARN }}" \
-              "PublicUrl=${{ vars.PUBLIC_URL }}" \
-              "OidcIssuerUrl=${{ vars.OIDC_ISSUER_URL }}" \
-              "OidcClientId=${{ vars.OIDC_CLIENT_ID }}" \
-              "OidcClientSecretArn=${{ vars.OIDC_CLIENT_SECRET_ARN }}" \
-              "PostLoginRedirect=${{ vars.POST_LOGIN_REDIRECT }}"
+          if grep -q '00000000-0000-0000-0000-000000000000' wrangler.toml; then
+            echo "::error::Set database_id in wrangler.toml (npx wrangler d1 create event-manager)"
+            exit 1
+          fi
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID PUBLIC_URL OIDC_ISSUER_URL OIDC_CLIENT_ID; do
+            [ -n "${!v}" ] || { echo "::error::$v is not set for the production environment"; exit 1; }
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: cargo install worker-build --locked --version 0.8.7
+
+      # Migrations go first, so they must stay compatible with the code that is still live.
+      - run: npx wrangler d1 migrations apply DB --remote
+
+      - name: Deploy Worker
+        run: |
+          vars=(--var "OIDC_ISSUER_URL:$OIDC_ISSUER_URL" --var "OIDC_CLIENT_ID:$OIDC_CLIENT_ID"
+                --var "OIDC_REDIRECT_URL:${PUBLIC_URL%/}/auth/callback")
+          [ -n "$POST_LOGIN_REDIRECT" ] && vars+=(--var "POST_LOGIN_REDIRECT:$POST_LOGIN_REDIRECT")
+          [ -n "$SESSION_TTL_HOURS" ] && vars+=(--var "SESSION_TTL_HOURS:$SESSION_TTL_HOURS")
+          npx wrangler deploy "${vars[@]}"
 
       - name: Smoke test
         run: |
-          url=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='Url'].OutputValue" --output text)
-          echo "### Deployed to $url" >> "$GITHUB_STEP_SUMMARY"
-          curl --fail --silent --show-error --retry 10 --retry-delay 6 --retry-all-errors \
-            "$url/events?limit=1"
+          echo "### Deployed to $PUBLIC_URL" >> "$GITHUB_STEP_SUMMARY"
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors \
+            "${PUBLIC_URL%/}/events?limit=1"
