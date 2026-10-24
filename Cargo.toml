@@ -1,38 +1,6 @@
 [workspace]
-members = ["worker"]
+members = ["e2e", "worker"]
 resolver = "3"
-
-[package]
-name = "event-manager-legacy"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-actix-web = { version = "4", default-features = false, features = ["macros", "cookies"] }
-chrono = { version = "0.4", features = ["serde"] }
-duckdb = { version = "1.10506.1", features = ["bundled", "chrono"], optional = true }
-env_logger = "0.11"
-log = "0.4"
-openidconnect = { version = "4", default-features = false, features = ["reqwest", "native-tls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "macros", "migrate"] }
-thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
-
-[lib]
-name = "event_manager"
-
-[[bin]]
-name = "event-manager"
-path = "src/main.rs"
-
-[dev-dependencies]
-actix-http = "3"
-
-[features]
-duckdb = ["dep:duckdb"]
 
 [profile.release]
 opt-level = "s"

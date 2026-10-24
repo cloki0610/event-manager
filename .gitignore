@@ -1,11 +1,9 @@
 /target
 *.pem
-!tests/fixtures/*.pem
+!e2e/tests/fixtures/*.pem
 *.db
 *.db-shm
 *.db-wal
-*.duckdb
-*.duckdb.wal
 .env
 /node_modules
 /worker/build
